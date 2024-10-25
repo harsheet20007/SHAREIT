@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>File Share via QR, Link & Radar</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+  <style>
+    body {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      height: 100vh;
+      background-color: #1e1e1e;
+      color: white;
+      font-family: Arial, sans-serif;
+    }
+
+    .container {
+      width: 80%;
+      max-width: 600px;
+      text-align: center;
+    }
+
+    .option-btn {
+      margin: 10px;
+      padding: 10px 20px;
+      font-size: 18px;
+      background-color: #3498db;
+      border: none;
+      border-radius: 5px;
+      cursor: pointer;
+      color: white;
+      transition: background-color 0.3s;
+    }
+
+    .option-btn:hover {
+      background-color: #2980b9;
+    }
+
+    #fileInput {
+      margin: 10px 0;
+      display: none;
+    }
+
+    .qr-code, .radar-container {
+      margin-top: 20px;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Share Files Seamlessly</h1>
+    <button class="option-btn" onclick="shareFile()">Share</button>
+    <button class="option-btn" onclick="receiveFile()">Receive</button>
+
+    <!-- Hidden File Input -->
+    <input type="file" id="fileInput" onchange="handleFileSelection(event)">
+
+    <!-- QR Code, Link, or Radar Area -->
+    <div id="qrcode" class="qr-code"></div>
+    <p id="shareLink"></p>
+    <div class="radar-container" id="radarContainer"></div>
+  </div>
+
+  <script>
+    let dataChannel, peerConnection;
+    let fileBlob;
+
+    // Setup WebRTC connection
+    function setupWebRTC() {
+      peerConnection = new RTCPeerConnection();
+      dataChannel = peerConnection.createDataChannel("fileTransfer");
+
+      peerConnection.onicecandidate = (event) => {
+        if (event.candidate) {
+          console.log("ICE Candidate:", JSON.stringify(event.candidate));
+        }
+      };
+
+      dataChannel.onopen = () => console.log("Data channel open.");
+      dataChannel.onmessage = handleReceivedData;
+    }
+
+    // Share File Flow
+    function shareFile() {
+      document.getElementById('fileInput').click();  // Open file input
+    }
+
+    function handleFileSelection(event) {
+      const file = event.target.files[0];
+      if (file) {
+        const reader = new FileReader();
+        reader.onload = () => {
+          fileBlob = new Blob([reader.result], { type: file.type });
+          createSharingOptions(URL.createObjectURL(fileBlob));
+        };
+        reader.readAsArrayBuffer(file);
+      }
+    }
+
+    function createSharingOptions(fileURL) {
+      // Generate QR code for the file URL
+      const qrcode = new QRCode(document.getElementById('qrcode'), {
+        text: fileURL,
+        width: 256,
+        height: 256,
+        colorDark: "#ffffff",
+        colorLight: "#1e1e1e"
+      });
+
+      // Show shareable link
+      const linkElement = document.getElementById('shareLink');
+      linkElement.textContent = "Share Link: " + fileURL;
+      linkElement.style.cursor = "pointer";
+      linkElement.onclick = () => window.open(fileURL, '_blank');
+    }
+
+    // Receive File Flow
+    function receiveFile() {
+      alert("Scan the QR code or use the share link.");
+      setupWebRTC();  // Initialize WebRTC connection
+    }
+
+    function handleReceivedData(event) {
+      const receivedBlob = new Blob([event.data]);
+      const downloadURL = URL.createObjectURL(receivedBlob);
+      window.open(downloadURL);
+    }
+
+    // Radar Detection (Simulated)
+    function startRadarDetection() {
+      const radarContainer = document.getElementById('radarContainer');
+      radarContainer.textContent = "Searching for nearby devices...";
+      // Simulated radar effect (You can replace this with WebRTC signaling logic)
+      setTimeout(() => {
+        radarContainer.textContent = "Device found! Ready to receive file.";
+      }, 3000);
+    }
+  </script>
+</body>
+</html>
