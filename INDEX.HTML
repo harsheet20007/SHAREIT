@@ -3,141 +3,201 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>File Share via QR, Link & Radar</title>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+  <title>P2P File Transfer with QR Code</title>
+
   <style>
     body {
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      height: 100vh;
-      background-color: #1e1e1e;
+      background-color: #1d1f27;
       color: white;
       font-family: Arial, sans-serif;
-    }
-
-    .container {
-      width: 80%;
-      max-width: 600px;
+      margin: 0;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      height: 100vh;
       text-align: center;
     }
 
-    .option-btn {
-      margin: 10px;
+    .container {
+      max-width: 400px;
+      width: 100%;
+    }
+
+    button, input {
       padding: 10px 20px;
-      font-size: 18px;
-      background-color: #3498db;
+      margin: 10px;
+      background-color: #4caf50;
+      color: white;
       border: none;
       border-radius: 5px;
       cursor: pointer;
+    }
+
+    input[type="file"] {
+      background-color: transparent;
       color: white;
-      transition: background-color 0.3s;
+      border: 1px solid white;
+      display: block;
+      margin: 10px auto;
     }
 
-    .option-btn:hover {
-      background-color: #2980b9;
+    button:hover {
+      background-color: #45a049;
     }
 
-    #fileInput {
-      margin: 10px 0;
+    #qrCanvas {
+      margin-top: 10px;
       display: none;
     }
 
-    .qr-code, .radar-container {
-      margin-top: 20px;
+    video {
+      width: 100%;
+      display: none;
+    }
+
+    textarea {
+      width: 100%;
+      margin-top: 10px;
+      height: 100px;
+      background-color: #1e1e2f;
+      color: white;
+      border: none;
+      padding: 10px;
     }
   </style>
 </head>
 <body>
-  <div class="container">
-    <h1>Share Files Seamlessly</h1>
-    <button class="option-btn" onclick="shareFile()">Share</button>
-    <button class="option-btn" onclick="receiveFile()">Receive</button>
 
-    <!-- Hidden File Input -->
-    <input type="file" id="fileInput" onchange="handleFileSelection(event)">
+<div class="container">
+  <h1>P2P File Transfer</h1>
 
-    <!-- QR Code, Link, or Radar Area -->
-    <div id="qrcode" class="qr-code"></div>
-    <p id="shareLink"></p>
-    <div class="radar-container" id="radarContainer"></div>
-  </div>
+  <input type="file" id="fileInput" />
+  <button id="sendBtn">Generate QR Code</button>
+  <button id="receiveBtn">Receive File</button>
 
-  <script>
-    let dataChannel, peerConnection;
-    let fileBlob;
+  <canvas id="qrCanvas"></canvas>
+  <video id="video" autoplay></video>
+  <textarea id="messageBox" readonly placeholder="Status messages..."></textarea>
+</div>
 
-    // Setup WebRTC connection
-    function setupWebRTC() {
-      peerConnection = new RTCPeerConnection();
-      dataChannel = peerConnection.createDataChannel("fileTransfer");
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrious/4.0.2/qrious.min.js"></script>
 
-      peerConnection.onicecandidate = (event) => {
-        if (event.candidate) {
-          console.log("ICE Candidate:", JSON.stringify(event.candidate));
-        }
-      };
+<script>
+  let localConnection, remoteConnection;
+  let sendChannel, receiveChannel;
+  let fileReader;
+  let fileToSend;
+  let receivedChunks = [];
 
-      dataChannel.onopen = () => console.log("Data channel open.");
-      dataChannel.onmessage = handleReceivedData;
+  const fileInput = document.getElementById('fileInput');
+  const sendBtn = document.getElementById('sendBtn');
+  const receiveBtn = document.getElementById('receiveBtn');
+  const qrCanvas = document.getElementById('qrCanvas');
+  const video = document.getElementById('video');
+  const messageBox = document.getElementById('messageBox');
+
+  function logMessage(msg) {
+    messageBox.value += `${msg}\n`;
+  }
+
+  async function setupConnection() {
+    if (!fileToSend) {
+      alert("Please select a file first.");
+      return;
     }
 
-    // Share File Flow
-    function shareFile() {
-      document.getElementById('fileInput').click();  // Open file input
-    }
+    localConnection = new RTCPeerConnection();
+    sendChannel = localConnection.createDataChannel('sendChannel');
+    sendChannel.onopen = sendFile;
+    sendChannel.onclose = () => logMessage('Connection closed.');
 
-    function handleFileSelection(event) {
-      const file = event.target.files[0];
-      if (file) {
-        const reader = new FileReader();
-        reader.onload = () => {
-          fileBlob = new Blob([reader.result], { type: file.type });
-          createSharingOptions(URL.createObjectURL(fileBlob));
-        };
-        reader.readAsArrayBuffer(file);
+    localConnection.onicecandidate = (event) => {
+      if (event.candidate) return;
+      const signalData = JSON.stringify(localConnection.localDescription);
+      generateQR(signalData);
+    };
+
+    remoteConnection = new RTCPeerConnection();
+    remoteConnection.ondatachannel = (event) => {
+      receiveChannel = event.channel;
+      receiveChannel.onmessage = handleReceiveMessage;
+      receiveChannel.onopen = () => logMessage('Connection open on receiver side!');
+    };
+
+    const offer = await localConnection.createOffer();
+    await localConnection.setLocalDescription(offer);
+  }
+
+  function generateQR(data) {
+    const qr = new QRious({
+      element: qrCanvas,
+      value: data,
+      size: 300,
+    });
+    qrCanvas.style.display = 'block';
+  }
+
+  async function handleQRScan() {
+    const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+    video.srcObject = stream;
+    video.style.display = 'block';
+
+    const qrScanner = new QrScanner(video, (result) => {
+      logMessage('QR Code Scanned!');
+      video.srcObject.getTracks().forEach((track) => track.stop());
+      video.style.display = 'none';
+      connectToSender(result);
+    });
+    qrScanner.start();
+  }
+
+  async function connectToSender(signalData) {
+    const desc = new RTCSessionDescription(JSON.parse(signalData));
+    await remoteConnection.setRemoteDescription(desc);
+    const answer = await remoteConnection.createAnswer();
+    await remoteConnection.setLocalDescription(answer);
+
+    remoteConnection.onicecandidate = (event) => {
+      if (event.candidate) {
+        localConnection.addIceCandidate(event.candidate);
       }
-    }
+    };
+  }
 
-    function createSharingOptions(fileURL) {
-      // Generate QR code for the file URL
-      const qrcode = new QRCode(document.getElementById('qrcode'), {
-        text: fileURL,
-        width: 256,
-        height: 256,
-        colorDark: "#ffffff",
-        colorLight: "#1e1e1e"
-      });
+  function sendFile() {
+    logMessage(`Sending file: ${fileToSend.name}`);
+    fileReader = new FileReader();
+    fileReader.onload = (e) => {
+      sendChannel.send(e.target.result);
+      sendChannel.send('EOF'); // Mark the end of file transfer
+      logMessage('File sent successfully!');
+    };
+    fileReader.readAsArrayBuffer(fileToSend);
+  }
 
-      // Show shareable link
-      const linkElement = document.getElementById('shareLink');
-      linkElement.textContent = "Share Link: " + fileURL;
-      linkElement.style.cursor = "pointer";
-      linkElement.onclick = () => window.open(fileURL, '_blank');
+  function handleReceiveMessage(event) {
+    if (event.data === 'EOF') {
+      const blob = new Blob(receivedChunks);
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'received_file';
+      a.click();
+      logMessage('File received successfully!');
+      return;
     }
+    receivedChunks.push(event.data);
+    logMessage('Receiving file chunk...');
+  }
 
-    // Receive File Flow
-    function receiveFile() {
-      alert("Scan the QR code or use the share link.");
-      setupWebRTC();  // Initialize WebRTC connection
-    }
+  fileInput.addEventListener('change', (e) => {
+    fileToSend = e.target.files[0];
+    logMessage(`File selected: ${fileToSend.name}`);
+  });
 
-    function handleReceivedData(event) {
-      const receivedBlob = new Blob([event.data]);
-      const downloadURL = URL.createObjectURL(receivedBlob);
-      window.open(downloadURL);
-    }
+  sendBtn.addEventListener('click', setupConnection);
+  receiveBtn.addEventListener('click', handleQRScan);
+</script>
 
-    // Radar Detection (Simulated)
-    function startRadarDetection() {
-      const radarContainer = document.getElementById('radarContainer');
-      radarContainer.textContent = "Searching for nearby devices...";
-      // Simulated radar effect (You can replace this with WebRTC signaling logic)
-      setTimeout(() => {
-        radarContainer.textContent = "Device found! Ready to receive file.";
-      }, 3000);
-    }
-  </script>
 </body>
 </html>
