@@ -79,8 +79,8 @@
 <script>
   let localConnection, remoteConnection;
   let sendChannel, receiveChannel;
-  let fileToSend, fileReader;
-  let receivedChunks = [];
+  let fileToSend;
+  const receivedChunks = [];
 
   const fileInput = document.getElementById('fileInput');
   const sendBtn = document.getElementById('sendBtn');
@@ -111,8 +111,7 @@
 
     localConnection.onicecandidate = (event) => {
       if (!event.candidate) {
-        const offer = JSON.stringify(localConnection.localDescription);
-        generateQR(offer);
+        generateQR(JSON.stringify(localConnection.localDescription));
       }
     };
 
@@ -151,10 +150,12 @@
         context.drawImage(video, 0, 0, canvas.width, canvas.height);
 
         const imageData = context.getImageData(0, 0, canvas.width, canvas.height);
-        const code = jsQR(imageData.data, canvas.width, canvas.height);
+        const code = jsQR(imageData.data, canvas.width, canvas.height, {
+          inversionAttempts: 'dontInvert',
+        });
 
         if (code) {
-          logMessage('QR Code Scanned!');
+          logMessage('QR Code scanned!');
           video.srcObject.getTracks().forEach(track => track.stop());
           video.style.display = 'none';
           connectToSender(code.data);
@@ -187,13 +188,13 @@
 
   function sendFile() {
     logMessage(`Sending file: ${fileToSend.name}`);
-    fileReader = new FileReader();
-    fileReader.onload = (e) => {
+    const reader = new FileReader();
+    reader.onload = (e) => {
       sendChannel.send(e.target.result);
-      sendChannel.send('EOF'); // Mark end of file
+      sendChannel.send('EOF'); // End of file marker
       logMessage('File sent successfully!');
     };
-    fileReader.readAsArrayBuffer(fileToSend);
+    reader.readAsArrayBuffer(fileToSend);
   }
 
   function handleReceiveMessage(event) {
