@@ -3,8 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>P2P File Sharing with Progress</title>
-
+  <title>P2P File Sharing</title>
   <style>
     body {
       display: flex;
@@ -16,9 +15,12 @@
       color: white;
       margin: 0;
       text-align: center;
+      font-family: Arial, sans-serif;
     }
-
-    button, select {
+    h1 {
+      font-size: 2rem;
+    }
+    button, input {
       padding: 10px;
       margin: 10px;
       border: none;
@@ -27,219 +29,190 @@
       color: white;
       cursor: pointer;
     }
-
+    #sendBtn, #stopShareBtn {
+      font-size: 1rem;
+      width: 200px;
+    }
     progress {
       width: 80%;
       margin: 10px;
       height: 20px;
-      display: none; /* Hidden initially */
+      display: none;
     }
-
-    video {
-      width: 300px;
-      height: auto;
-      display: none; /* Shown only when scanning QR */
+    #qrCode {
+      margin: 20px 0;
+      display: none;
     }
-
-    textarea {
-      width: 90%;
-      height: 100px;
-      margin-top: 10px;
-      background-color: #1e1e2f;
-      color: white;
-      border: none;
-      padding: 10px;
+    #shareOptions {
+      display: none;
+      flex-direction: row;
+      gap: 10px;
+      justify-content: center;
+      align-items: center;
+    }
+    .share-btn {
+      background-color: #444;
+      padding: 8px 15px;
+      border-radius: 5px;
+      cursor: pointer;
+      transition: background-color 0.2s ease-in-out;
+    }
+    .share-btn:hover {
+      background-color: #666;
     }
   </style>
+  <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-storage-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-database-compat.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrious/4.0.2/qrious.min.js"></script>
 </head>
 <body>
+<h1>P2P File Sharing</h1>
 
-<h1>P2P File Sharing via QR</h1>
+<div id="modeSelection">
+  <button id="sendBtn">Send File</button>
+  <button id="stopShareBtn" style="display:none;">Stop Sharing</button>
+</div>
 
-<input type="file" id="fileInput" />
-<button id="sendBtn">Generate QR Code</button>
-<button id="receiveBtn">Scan QR Code</button>
+<input type="file" id="fileInput" style="display: none;" />
+<progress id="uploadProgress" value="0" max="100"></progress>
+<canvas id="qrCode"></canvas>
 
-<progress id="senderProgress" value="0" max="100"></progress>
-<progress id="receiverProgress" value="0" max="100"></progress>
-
-<select id="cameraSelect"></select>
-<video id="video" autoplay></video>
-
-<textarea id="log" readonly></textarea>
-
-<script src="https://cdnjs.cloudflare.com/ajax/libs/qrious/4.0.2/qrious.min.js"></script>
-<script src="https://cdn.jsdelivr.net/npm/jsqr/dist/jsQR.js"></script>
+<div id="shareOptions">
+  <input type="text" id="shareLink" readonly />
+  <button class="share-btn" onclick="copyLink()">Copy Link</button>
+  <button class="share-btn" onclick="shareOnWhatsApp()">WhatsApp</button>
+  <button class="share-btn" onclick="shareOnGmail()">Gmail</button>
+  <button class="share-btn" onclick="shareOnFacebook()">Facebook</button>
+</div>
 
 <script>
-  const fileInput = document.getElementById('fileInput');
+  // Firebase Configuration (Replace with your actual Firebase config)
+  const firebaseConfig = {
+    apiKey: "AIzaSyCNyZAmw3D8aCqNOHOw0f3YKtZWNatauN8",
+    authDomain: "hello-4105a.firebaseapp.com",
+    databaseURL: "https://hello-4105a-default-rtdb.firebaseio.com",
+    projectId: "hello-4105a",
+    storageBucket: "hello-4105a.appspot.com",
+    messagingSenderId: "978669199403",
+    appId: "1:978669199403:web:6c20e3dbaf815bba890a6e",
+    measurementId: "G-2TGPP3E88X"
+  };
+  firebase.initializeApp(firebaseConfig);
+
+  const storage = firebase.storage();
+  const database = firebase.database();
+
   const sendBtn = document.getElementById('sendBtn');
-  const receiveBtn = document.getElementById('receiveBtn');
-  const video = document.getElementById('video');
-  const cameraSelect = document.getElementById('cameraSelect');
-  const log = document.getElementById('log');
-  const senderProgress = document.getElementById('senderProgress');
-  const receiverProgress = document.getElementById('receiverProgress');
+  const stopShareBtn = document.getElementById('stopShareBtn');
+  const fileInput = document.getElementById('fileInput');
+  const uploadProgress = document.getElementById('uploadProgress');
+  const qrCode = document.getElementById('qrCode');
+  const shareLink = document.getElementById('shareLink');
+  const shareOptions = document.getElementById('shareOptions');
 
-  let localConnection, remoteConnection;
-  let sendChannel, receiveChannel;
-  let fileToSend;
-  const receivedChunks = [];
-  const CHUNK_SIZE = 16 * 1024;  // 16 KB chunks
+  let fileRef, fileKey;
 
-  function logMessage(msg) {
-    log.value += `${msg}\n`;
+  async function uploadFile(file) {
+    fileRef = storage.ref(`files/${file.name}`);
+    const uploadTask = fileRef.put(file);
+
+    uploadTask.on(
+      'state_changed',
+      (snapshot) => {
+        const progress = (snapshot.bytesTransferred / snapshot.totalBytes) * 100;
+        uploadProgress.value = progress;
+        uploadProgress.style.display = 'block';
+      },
+      (error) => alert(`Error: ${error.message}`),
+      async () => {
+        const downloadURL = await fileRef.getDownloadURL();
+        const newFileRef = database.ref('files').push();
+        fileKey = newFileRef.key;
+
+        // Set up disconnection listener
+        newFileRef.set({ url: downloadURL });
+        newFileRef.onDisconnect().remove();
+
+        monitorFileDeletion(fileKey);
+        displayQRCode(downloadURL);
+        displayShareLink(downloadURL);
+        stopShareBtn.style.display = 'block';
+      }
+    );
   }
+
+  function displayQRCode(url) {
+    qrCode.style.display = 'block';
+    new QRious({ element: qrCode, value: url, size: 200 });
+  }
+
+  function displayShareLink(url) {
+    shareLink.value = url;
+    shareOptions.style.display = 'flex';
+  }
+
+  function copyLink() {
+    shareLink.select();
+    document.execCommand('copy');
+    alert('Link copied to clipboard');
+  }
+
+  function shareOnWhatsApp() {
+    const url = shareLink.value;
+    window.open(`https://wa.me/?text=${encodeURIComponent(url)}`, '_blank');
+  }
+
+  function shareOnGmail() {
+    const url = shareLink.value;
+    window.open(`mailto:?subject=File Sharing Link&body=${encodeURIComponent(url)}`, '_blank');
+  }
+
+  function shareOnFacebook() {
+    const url = shareLink.value;
+    window.open(`https://www.facebook.com/sharer/sharer.php?u=${encodeURIComponent(url)}`, '_blank');
+  }
+
+  async function deleteFile() {
+    try {
+      if (fileRef) await fileRef.delete();
+      if (fileKey) await database.ref('files/' + fileKey).remove();
+      alert("File sharing stopped. The file has been deleted.");
+    } catch (error) {
+      alert("Error deleting file: " + error.message);
+    }
+    qrCode.style.display = 'none';
+    uploadProgress.style.display = 'none';
+    shareOptions.style.display = 'none';
+    stopShareBtn.style.display = 'none';
+  }
+
+  function monitorFileDeletion(fileKey) {
+    const checkInterval = setInterval(async () => {
+      const fileSnapshot = await database.ref('files/' + fileKey).get();
+      if (!fileSnapshot.exists()) {
+        clearInterval(checkInterval);
+        if (fileRef) await fileRef.delete();
+      }
+    }, 3000);
+  }
+
+  sendBtn.addEventListener('click', () => {
+    fileInput.style.display = 'block';
+  });
 
   fileInput.addEventListener('change', (e) => {
-    fileToSend = e.target.files[0];
-    logMessage(`Selected file: ${fileToSend.name}`);
+    const file = e.target.files[0];
+    if (file) uploadFile(file);
   });
 
-  sendBtn.addEventListener('click', async () => {
-    if (!fileToSend) {
-      alert('Please select a file to send.');
-      return;
-    }
-
-    senderProgress.style.display = 'block';
-    localConnection = new RTCPeerConnection();
-    sendChannel = localConnection.createDataChannel('fileChannel');
-    sendChannel.onopen = () => sendFile();
-    sendChannel.onclose = () => logMessage('Connection closed.');
-
-    localConnection.onicecandidate = (event) => {
-      if (!event.candidate) {
-        generateQR(JSON.stringify(localConnection.localDescription));
-      }
-    };
-
-    const offer = await localConnection.createOffer();
-    await localConnection.setLocalDescription(offer);
+  stopShareBtn.addEventListener('click', async () => {
+    await deleteFile();
   });
 
-  function generateQR(data) {
-    const qr = new QRious({
-      element: document.createElement('canvas'),
-      value: data,
-      size: 300,
-    });
-
-    const qrImg = new Image();
-    qrImg.src = qr.toDataURL();
-    document.body.appendChild(qrImg);
-    logMessage('QR code generated. Scan to connect.');
-  }
-
-  receiveBtn.addEventListener('click', async () => {
-    const devices = await navigator.mediaDevices.enumerateDevices();
-    const videoDevices = devices.filter(device => device.kind === 'videoinput');
-
-    cameraSelect.innerHTML = videoDevices.map(
-      (device, index) => `<option value="${device.deviceId}">${device.label || `Camera ${index + 1}`}</option>`
-    ).join('');
-
-    startCamera(videoDevices[0].deviceId);
+  window.addEventListener('beforeunload', async () => {
+    await deleteFile();
   });
-
-  cameraSelect.addEventListener('change', (e) => {
-    startCamera(e.target.value);
-  });
-
-  async function startCamera(deviceId) {
-    const stream = await navigator.mediaDevices.getUserMedia({
-      video: { deviceId: { exact: deviceId } }
-    });
-    video.srcObject = stream;
-    video.style.display = 'block';
-    scanQRCode();
-  }
-
-  function scanQRCode() {
-    const canvas = document.createElement('canvas');
-    const context = canvas.getContext('2d');
-
-    function tick() {
-      if (video.readyState === video.HAVE_ENOUGH_DATA) {
-        canvas.width = video.videoWidth;
-        canvas.height = video.videoHeight;
-        context.drawImage(video, 0, 0, canvas.width, canvas.height);
-
-        const imageData = context.getImageData(0, 0, canvas.width, canvas.height);
-        const code = jsQR(imageData.data, canvas.width, canvas.height, {
-          inversionAttempts: 'dontInvert',
-        });
-
-        if (code) {
-          logMessage('QR code scanned successfully!');
-          video.srcObject.getTracks().forEach(track => track.stop());
-          video.style.display = 'none';
-          connectToSender(code.data);
-        } else {
-          requestAnimationFrame(tick);
-        }
-      } else {
-        requestAnimationFrame(tick);
-      }
-    }
-
-    tick();
-  }
-
-  async function connectToSender(offer) {
-    receiverProgress.style.display = 'block';
-    remoteConnection = new RTCPeerConnection();
-    remoteConnection.ondatachannel = (event) => {
-      receiveChannel = event.channel;
-      receiveChannel.onmessage = handleReceiveMessage;
-    };
-
-    await remoteConnection.setRemoteDescription(JSON.parse(offer));
-    const answer = await remoteConnection.createAnswer();
-    await remoteConnection.setLocalDescription(answer);
-  }
-
-  function sendFile() {
-    logMessage(`Sending file: ${fileToSend.name}`);
-    const reader = new FileReader();
-    let offset = 0;
-
-    reader.onload = (e) => {
-      sendChannel.send(e.target.result);
-      offset += CHUNK_SIZE;
-      senderProgress.value = (offset / fileToSend.size) * 100;
-
-      if (offset < fileToSend.size) {
-        readSlice(offset);
-      } else {
-        sendChannel.send('EOF');
-        logMessage('File sent successfully!');
-      }
-    };
-
-    function readSlice(o) {
-      const slice = fileToSend.slice(o, o + CHUNK_SIZE);
-      reader.readAsArrayBuffer(slice);
-    }
-
-    readSlice(0);
-  }
-
-  function handleReceiveMessage(event) {
-    if (event.data === 'EOF') {
-      const blob = new Blob(receivedChunks);
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = 'received_file';
-      a.click();
-      logMessage('File received successfully!');
-    } else {
-      receivedChunks.push(event.data);
-      receiverProgress.value = (receivedChunks.length * CHUNK_SIZE / fileToSend.size) * 100;
-    }
-  }
 </script>
-
 </body>
 </html>
