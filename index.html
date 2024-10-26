@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Seamless P2P File Transfer</title>
+  <title>P2P File Transfer</title>
 
   <style>
     body {
@@ -46,6 +46,7 @@
 
     video {
       width: 300px;
+      height: 300px;
       display: none;
     }
 
@@ -129,29 +130,42 @@
   }
 
   receiveBtn.addEventListener('click', async () => {
-    const stream = await navigator.mediaDevices.getUserMedia({ video: true });
-    video.srcObject = stream;
-    video.style.display = 'block';
-
-    const scanQRInterval = setInterval(() => {
-      const canvas = document.createElement('canvas');
-      const context = canvas.getContext('2d');
-      canvas.width = video.videoWidth;
-      canvas.height = video.videoHeight;
-      context.drawImage(video, 0, 0, canvas.width, canvas.height);
-
-      const imageData = context.getImageData(0, 0, canvas.width, canvas.height);
-      const code = jsQR(imageData.data, canvas.width, canvas.height);
-
-      if (code) {
-        logMessage('QR Code Scanned!');
-        clearInterval(scanQRInterval);
-        video.srcObject.getTracks().forEach(track => track.stop());
-        video.style.display = 'none';
-        connectToSender(code.data);
-      }
-    }, 500);
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+      video.srcObject = stream;
+      video.style.display = 'block';
+      scanQRCode();
+    } catch (error) {
+      logMessage('Camera access denied or not available.');
+    }
   });
+
+  function scanQRCode() {
+    const canvas = document.createElement('canvas');
+    const context = canvas.getContext('2d');
+
+    function tick() {
+      if (video.readyState === video.HAVE_ENOUGH_DATA) {
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+        context.drawImage(video, 0, 0, canvas.width, canvas.height);
+
+        const imageData = context.getImageData(0, 0, canvas.width, canvas.height);
+        const code = jsQR(imageData.data, canvas.width, canvas.height);
+
+        if (code) {
+          logMessage('QR Code Scanned!');
+          video.srcObject.getTracks().forEach(track => track.stop());
+          video.style.display = 'none';
+          connectToSender(code.data);
+          return;
+        }
+      }
+      requestAnimationFrame(tick);
+    }
+
+    tick();
+  }
 
   async function connectToSender(offer) {
     remoteConnection = new RTCPeerConnection();
