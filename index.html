@@ -3,112 +3,105 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>P2P File Sharing</title>
+  <title>P2P File Sharing with Progress Bars</title>
 
   <style>
     body {
-      background-color: #1d1f27;
-      color: white;
-      font-family: Arial, sans-serif;
       display: flex;
       flex-direction: column;
       align-items: center;
       justify-content: center;
       height: 100vh;
+      background-color: #1d1f27;
+      color: white;
       margin: 0;
       text-align: center;
     }
 
-    button, input {
-      padding: 10px 20px;
+    button, select {
+      padding: 10px;
       margin: 10px;
-      background-color: #4caf50;
-      color: white;
       border: none;
       border-radius: 5px;
+      background-color: #4caf50;
+      color: white;
       cursor: pointer;
     }
 
-    input[type="file"] {
-      background-color: transparent;
-      color: white;
-      border: 1px solid white;
-    }
-
-    button:hover {
-      background-color: #45a049;
-    }
-
-    #qrCanvas {
+    progress {
+      width: 80%;
       margin: 10px;
-      display: none;
+      height: 20px;
     }
 
-    video {
-      width: 300px;
-      height: 300px;
+    video, canvas {
       display: none;
     }
 
     textarea {
-      width: 300px;
+      width: 90%;
       height: 100px;
+      margin-top: 10px;
       background-color: #1e1e2f;
       color: white;
       border: none;
-      margin-top: 10px;
       padding: 10px;
-    }
-
-    select {
-      margin: 10px;
-      padding: 5px;
     }
   </style>
 </head>
 <body>
 
-<h1>P2P File Sharing</h1>
+<h1>P2P File Sharing via QR</h1>
 
 <input type="file" id="fileInput" />
 <button id="sendBtn">Generate QR Code</button>
 <button id="receiveBtn">Scan QR Code</button>
 
+<progress id="senderProgress" value="0" max="100"></progress>
+<progress id="receiverProgress" value="0" max="100"></progress>
+
 <select id="cameraSelect"></select>
-<canvas id="qrCanvas"></canvas>
 <video id="video" autoplay></video>
-<textarea id="messageBox" readonly placeholder="Status messages..."></textarea>
+<canvas id="canvas"></canvas>
+<textarea id="log" readonly></textarea>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrious/4.0.2/qrious.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/jsqr/dist/jsQR.js"></script>
 
 <script>
+  const fileInput = document.getElementById('fileInput');
+  const sendBtn = document.getElementById('sendBtn');
+  const receiveBtn = document.getElementById('receiveBtn');
+  const video = document.getElementById('video');
+  const cameraSelect = document.getElementById('cameraSelect');
+  const canvas = document.getElementById('canvas');
+  const log = document.getElementById('log');
+  const senderProgress = document.getElementById('senderProgress');
+  const receiverProgress = document.getElementById('receiverProgress');
+
   let localConnection, remoteConnection;
   let sendChannel, receiveChannel;
   let fileToSend;
   const receivedChunks = [];
-  const video = document.getElementById('video');
-  const cameraSelect = document.getElementById('cameraSelect');
-  const qrCanvas = document.getElementById('qrCanvas');
-  const messageBox = document.getElementById('messageBox');
+  const CHUNK_SIZE = 16 * 1024;  // 16 KB chunks
 
   function logMessage(msg) {
-    messageBox.value += `${msg}\n`;
+    log.value += `${msg}\n`;
   }
 
-  document.getElementById('fileInput').addEventListener('change', (e) => {
+  fileInput.addEventListener('change', (e) => {
     fileToSend = e.target.files[0];
-    logMessage(`File selected: ${fileToSend.name}`);
+    logMessage(`Selected file: ${fileToSend.name}`);
   });
 
-  document.getElementById('sendBtn').addEventListener('click', async () => {
+  sendBtn.addEventListener('click', async () => {
     if (!fileToSend) {
-      alert('Please select a file first.');
+      alert('Please select a file to send.');
       return;
     }
 
     localConnection = new RTCPeerConnection();
-    sendChannel = localConnection.createDataChannel('sendChannel');
+    sendChannel = localConnection.createDataChannel('fileChannel');
     sendChannel.onopen = () => sendFile();
     sendChannel.onclose = () => logMessage('Connection closed.');
 
@@ -124,22 +117,23 @@
 
   function generateQR(data) {
     const qr = new QRious({
-      element: qrCanvas,
+      element: canvas,
       value: data,
       size: 300,
     });
-    qrCanvas.style.display = 'block';
+    canvas.style.display = 'block';
+    logMessage('QR code generated. Scan to connect.');
   }
 
-  document.getElementById('receiveBtn').addEventListener('click', async () => {
+  receiveBtn.addEventListener('click', async () => {
     const devices = await navigator.mediaDevices.enumerateDevices();
     const videoDevices = devices.filter(device => device.kind === 'videoinput');
-    
+
     cameraSelect.innerHTML = videoDevices.map(
       (device, index) => `<option value="${device.deviceId}">${device.label || `Camera ${index + 1}`}</option>`
     ).join('');
 
-    startCamera(videoDevices[0].deviceId);  // Start with the first camera
+    startCamera(videoDevices[0].deviceId);
   });
 
   cameraSelect.addEventListener('change', (e) => {
@@ -156,7 +150,6 @@
   }
 
   function scanQRCode() {
-    const canvas = document.createElement('canvas');
     const context = canvas.getContext('2d');
 
     function tick() {
@@ -171,14 +164,16 @@
         });
 
         if (code) {
-          logMessage('QR Code scanned!');
+          logMessage('QR code scanned successfully!');
           video.srcObject.getTracks().forEach(track => track.stop());
           video.style.display = 'none';
           connectToSender(code.data);
-          return;
+        } else {
+          requestAnimationFrame(tick);
         }
+      } else {
+        requestAnimationFrame(tick);
       }
-      requestAnimationFrame(tick);
     }
 
     tick();
@@ -194,23 +189,32 @@
     await remoteConnection.setRemoteDescription(JSON.parse(offer));
     const answer = await remoteConnection.createAnswer();
     await remoteConnection.setLocalDescription(answer);
-
-    remoteConnection.onicecandidate = (event) => {
-      if (event.candidate) {
-        localConnection.addIceCandidate(event.candidate);
-      }
-    };
   }
 
   function sendFile() {
     logMessage(`Sending file: ${fileToSend.name}`);
     const reader = new FileReader();
+    let offset = 0;
+
     reader.onload = (e) => {
       sendChannel.send(e.target.result);
-      sendChannel.send('EOF'); // End of file marker
-      logMessage('File sent successfully!');
+      offset += CHUNK_SIZE;
+      senderProgress.value = (offset / fileToSend.size) * 100;
+
+      if (offset < fileToSend.size) {
+        readSlice(offset);
+      } else {
+        sendChannel.send('EOF');
+        logMessage('File sent successfully!');
+      }
     };
-    reader.readAsArrayBuffer(fileToSend);
+
+    function readSlice(o) {
+      const slice = fileToSend.slice(o, o + CHUNK_SIZE);
+      reader.readAsArrayBuffer(slice);
+    }
+
+    readSlice(0);
   }
 
   function handleReceiveMessage(event) {
@@ -224,6 +228,7 @@
       logMessage('File received successfully!');
     } else {
       receivedChunks.push(event.data);
+      receiverProgress.value = (receivedChunks.length * CHUNK_SIZE / fileToSend.size) * 100;
     }
   }
 </script>
