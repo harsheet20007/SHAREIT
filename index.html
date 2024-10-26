@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>P2P File Transfer</title>
+  <title>P2P File Sharing</title>
 
   <style>
     body {
@@ -59,16 +59,22 @@
       margin-top: 10px;
       padding: 10px;
     }
+
+    select {
+      margin: 10px;
+      padding: 5px;
+    }
   </style>
 </head>
 <body>
 
-<h1>P2P File Transfer</h1>
+<h1>P2P File Sharing</h1>
 
 <input type="file" id="fileInput" />
 <button id="sendBtn">Generate QR Code</button>
 <button id="receiveBtn">Scan QR Code</button>
 
+<select id="cameraSelect"></select>
 <canvas id="qrCanvas"></canvas>
 <video id="video" autoplay></video>
 <textarea id="messageBox" readonly placeholder="Status messages..."></textarea>
@@ -81,24 +87,21 @@
   let sendChannel, receiveChannel;
   let fileToSend;
   const receivedChunks = [];
-
-  const fileInput = document.getElementById('fileInput');
-  const sendBtn = document.getElementById('sendBtn');
-  const receiveBtn = document.getElementById('receiveBtn');
-  const qrCanvas = document.getElementById('qrCanvas');
   const video = document.getElementById('video');
+  const cameraSelect = document.getElementById('cameraSelect');
+  const qrCanvas = document.getElementById('qrCanvas');
   const messageBox = document.getElementById('messageBox');
 
   function logMessage(msg) {
     messageBox.value += `${msg}\n`;
   }
 
-  fileInput.addEventListener('change', (e) => {
+  document.getElementById('fileInput').addEventListener('change', (e) => {
     fileToSend = e.target.files[0];
     logMessage(`File selected: ${fileToSend.name}`);
   });
 
-  sendBtn.addEventListener('click', async () => {
+  document.getElementById('sendBtn').addEventListener('click', async () => {
     if (!fileToSend) {
       alert('Please select a file first.');
       return;
@@ -106,7 +109,7 @@
 
     localConnection = new RTCPeerConnection();
     sendChannel = localConnection.createDataChannel('sendChannel');
-    sendChannel.onopen = sendFile;
+    sendChannel.onopen = () => sendFile();
     sendChannel.onclose = () => logMessage('Connection closed.');
 
     localConnection.onicecandidate = (event) => {
@@ -128,16 +131,29 @@
     qrCanvas.style.display = 'block';
   }
 
-  receiveBtn.addEventListener('click', async () => {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: true });
-      video.srcObject = stream;
-      video.style.display = 'block';
-      scanQRCode();
-    } catch (error) {
-      logMessage('Camera access denied or not available.');
-    }
+  document.getElementById('receiveBtn').addEventListener('click', async () => {
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    const videoDevices = devices.filter(device => device.kind === 'videoinput');
+    
+    cameraSelect.innerHTML = videoDevices.map(
+      (device, index) => `<option value="${device.deviceId}">${device.label || `Camera ${index + 1}`}</option>`
+    ).join('');
+
+    startCamera(videoDevices[0].deviceId);  // Start with the first camera
   });
+
+  cameraSelect.addEventListener('change', (e) => {
+    startCamera(e.target.value);
+  });
+
+  async function startCamera(deviceId) {
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: { deviceId: { exact: deviceId } }
+    });
+    video.srcObject = stream;
+    video.style.display = 'block';
+    scanQRCode();
+  }
 
   function scanQRCode() {
     const canvas = document.createElement('canvas');
