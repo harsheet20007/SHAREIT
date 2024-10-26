@@ -3,24 +3,20 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>P2P File Transfer with QR Code</title>
+  <title>Seamless P2P File Transfer</title>
 
   <style>
     body {
       background-color: #1d1f27;
       color: white;
       font-family: Arial, sans-serif;
-      margin: 0;
       display: flex;
-      justify-content: center;
+      flex-direction: column;
       align-items: center;
+      justify-content: center;
       height: 100vh;
+      margin: 0;
       text-align: center;
-    }
-
-    .container {
-      max-width: 400px;
-      width: 100%;
     }
 
     button, input {
@@ -37,8 +33,6 @@
       background-color: transparent;
       color: white;
       border: 1px solid white;
-      display: block;
-      margin: 10px auto;
     }
 
     button:hover {
@@ -46,47 +40,45 @@
     }
 
     #qrCanvas {
-      margin-top: 10px;
+      margin: 10px;
       display: none;
     }
 
     video {
-      width: 100%;
+      width: 300px;
       display: none;
     }
 
     textarea {
-      width: 100%;
-      margin-top: 10px;
+      width: 300px;
       height: 100px;
       background-color: #1e1e2f;
       color: white;
       border: none;
+      margin-top: 10px;
       padding: 10px;
     }
   </style>
 </head>
 <body>
 
-<div class="container">
-  <h1>P2P File Transfer</h1>
+<h1>P2P File Transfer</h1>
 
-  <input type="file" id="fileInput" />
-  <button id="sendBtn">Generate QR Code</button>
-  <button id="receiveBtn">Receive File</button>
+<input type="file" id="fileInput" />
+<button id="sendBtn">Generate QR Code</button>
+<button id="receiveBtn">Scan QR Code</button>
 
-  <canvas id="qrCanvas"></canvas>
-  <video id="video" autoplay></video>
-  <textarea id="messageBox" readonly placeholder="Status messages..."></textarea>
-</div>
+<canvas id="qrCanvas"></canvas>
+<video id="video" autoplay></video>
+<textarea id="messageBox" readonly placeholder="Status messages..."></textarea>
 
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrious/4.0.2/qrious.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jsqr/dist/jsQR.js"></script>
 
 <script>
   let localConnection, remoteConnection;
   let sendChannel, receiveChannel;
-  let fileReader;
-  let fileToSend;
+  let fileToSend, fileReader;
   let receivedChunks = [];
 
   const fileInput = document.getElementById('fileInput');
@@ -100,9 +92,14 @@
     messageBox.value += `${msg}\n`;
   }
 
-  async function setupConnection() {
+  fileInput.addEventListener('change', (e) => {
+    fileToSend = e.target.files[0];
+    logMessage(`File selected: ${fileToSend.name}`);
+  });
+
+  sendBtn.addEventListener('click', async () => {
     if (!fileToSend) {
-      alert("Please select a file first.");
+      alert('Please select a file first.');
       return;
     }
 
@@ -112,21 +109,15 @@
     sendChannel.onclose = () => logMessage('Connection closed.');
 
     localConnection.onicecandidate = (event) => {
-      if (event.candidate) return;
-      const signalData = JSON.stringify(localConnection.localDescription);
-      generateQR(signalData);
-    };
-
-    remoteConnection = new RTCPeerConnection();
-    remoteConnection.ondatachannel = (event) => {
-      receiveChannel = event.channel;
-      receiveChannel.onmessage = handleReceiveMessage;
-      receiveChannel.onopen = () => logMessage('Connection open on receiver side!');
+      if (!event.candidate) {
+        const offer = JSON.stringify(localConnection.localDescription);
+        generateQR(offer);
+      }
     };
 
     const offer = await localConnection.createOffer();
     await localConnection.setLocalDescription(offer);
-  }
+  });
 
   function generateQR(data) {
     const qr = new QRious({
@@ -137,23 +128,39 @@
     qrCanvas.style.display = 'block';
   }
 
-  async function handleQRScan() {
-    const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+  receiveBtn.addEventListener('click', async () => {
+    const stream = await navigator.mediaDevices.getUserMedia({ video: true });
     video.srcObject = stream;
     video.style.display = 'block';
 
-    const qrScanner = new QrScanner(video, (result) => {
-      logMessage('QR Code Scanned!');
-      video.srcObject.getTracks().forEach((track) => track.stop());
-      video.style.display = 'none';
-      connectToSender(result);
-    });
-    qrScanner.start();
-  }
+    const scanQRInterval = setInterval(() => {
+      const canvas = document.createElement('canvas');
+      const context = canvas.getContext('2d');
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      context.drawImage(video, 0, 0, canvas.width, canvas.height);
 
-  async function connectToSender(signalData) {
-    const desc = new RTCSessionDescription(JSON.parse(signalData));
-    await remoteConnection.setRemoteDescription(desc);
+      const imageData = context.getImageData(0, 0, canvas.width, canvas.height);
+      const code = jsQR(imageData.data, canvas.width, canvas.height);
+
+      if (code) {
+        logMessage('QR Code Scanned!');
+        clearInterval(scanQRInterval);
+        video.srcObject.getTracks().forEach(track => track.stop());
+        video.style.display = 'none';
+        connectToSender(code.data);
+      }
+    }, 500);
+  });
+
+  async function connectToSender(offer) {
+    remoteConnection = new RTCPeerConnection();
+    remoteConnection.ondatachannel = (event) => {
+      receiveChannel = event.channel;
+      receiveChannel.onmessage = handleReceiveMessage;
+    };
+
+    await remoteConnection.setRemoteDescription(JSON.parse(offer));
     const answer = await remoteConnection.createAnswer();
     await remoteConnection.setLocalDescription(answer);
 
@@ -169,7 +176,7 @@
     fileReader = new FileReader();
     fileReader.onload = (e) => {
       sendChannel.send(e.target.result);
-      sendChannel.send('EOF'); // Mark the end of file transfer
+      sendChannel.send('EOF'); // Mark end of file
       logMessage('File sent successfully!');
     };
     fileReader.readAsArrayBuffer(fileToSend);
@@ -184,19 +191,10 @@
       a.download = 'received_file';
       a.click();
       logMessage('File received successfully!');
-      return;
+    } else {
+      receivedChunks.push(event.data);
     }
-    receivedChunks.push(event.data);
-    logMessage('Receiving file chunk...');
   }
-
-  fileInput.addEventListener('change', (e) => {
-    fileToSend = e.target.files[0];
-    logMessage(`File selected: ${fileToSend.name}`);
-  });
-
-  sendBtn.addEventListener('click', setupConnection);
-  receiveBtn.addEventListener('click', handleQRScan);
 </script>
 
 </body>
