@@ -50,46 +50,61 @@
       justify-content: center;
       align-items: center;
     }
-    .share-btn {
-      background-color: #444;
-      padding: 8px 15px;
-      border-radius: 5px;
-      cursor: pointer;
-      transition: background-color 0.2s ease-in-out;
+    .upload-animation {
+      display: flex;
+      gap: 5px;
+      position: relative;
+      align-items: center;
+      margin-top: 20px;
     }
-    .share-btn:hover {
-      background-color: #666;
+    .dot {
+      width: 10px;
+      height: 10px;
+      background-color: #4caf50;
+      border-radius: 50%;
+      opacity: 0;
+      animation: bounce 1.2s infinite ease-in-out;
+    }
+    .dot:nth-child(1) { animation-delay: 0s; }
+    .dot:nth-child(2) { animation-delay: 0.2s; }
+    .dot:nth-child(3) { animation-delay: 0.4s; }
+
+    @keyframes bounce {
+      0%, 100% { transform: translateY(0); opacity: 0.3; }
+      50% { transform: translateY(-10px); opacity: 1; }
     }
   </style>
   <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-storage-compat.js"></script>
-  <script src="https://www.gstatic.com/firebasejs/9.22.2/firebase-database-compat.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/qrious/4.0.2/qrious.min.js"></script>
 </head>
 <body>
-<h1>P2P File Sharing</h1>
+  <h1>P2P File Sharing</h1>
 
-<div id="modeSelection">
-  <button id="sendBtn">Send File</button>
-  <button id="stopShareBtn" style="display:none;">Stop Sharing</button>
-</div>
+  <div id="modeSelection">
+    <button id="sendBtn">Send Files</button>
+    <button id="stopShareBtn" style="display:none;">Stop Sharing</button>
+  </div>
 
-<input type="file" id="fileInput" style="display: none;" />
-<progress id="uploadProgress" value="0" max="100"></progress>
-<canvas id="qrCode"></canvas>
+  <div id="uploadAnimation" class="upload-animation" style="display: none;">
+    <div class="dot"></div>
+    <div class="dot"></div>
+    <div class="dot"></div>
+  </div>
 
-<div id="shareOptions">
-  <input type="text" id="shareLink" readonly />
-  <button class="share-btn" onclick="copyLink()">Copy Link</button>
-  <button class="share-btn" onclick="shareOnWhatsApp()">WhatsApp</button>
-  <button class="share-btn" onclick="shareOnGmail()">Gmail</button>
-  <button class="share-btn" onclick="shareOnFacebook()">Facebook</button>
-</div>
+  <input type="file" id="fileInput" multiple style="display: none;" />
+  <progress id="uploadProgress" value="0" max="100"></progress>
+  <canvas id="qrCode"></canvas>
 
-<script>
-  // Firebase Configuration (Replace with your actual Firebase config)
-  const firebaseConfig = {
-    apiKey: "AIzaSyCNyZAmw3D8aCqNOHOw0f3YKtZWNatauN8",
+  <div id="shareOptions">
+    <input type="text" id="shareLink" readonly />
+    <button onclick="copyLink()">Copy Link</button>
+  </div>
+
+  <script>
+    const firebaseConfig = {
+      apiKey: "AIzaSyCNyZAmw3D8aCqNOHOw0f3YKtZWNatauN8",
     authDomain: "hello-4105a.firebaseapp.com",
     databaseURL: "https://hello-4105a-default-rtdb.firebaseio.com",
     projectId: "hello-4105a",
@@ -97,122 +112,76 @@
     messagingSenderId: "978669199403",
     appId: "1:978669199403:web:6c20e3dbaf815bba890a6e",
     measurementId: "G-2TGPP3E88X"
-  };
-  firebase.initializeApp(firebaseConfig);
+    };
+    firebase.initializeApp(firebaseConfig);
+    const storage = firebase.storage();
 
-  const storage = firebase.storage();
-  const database = firebase.database();
+    const sendBtn = document.getElementById('sendBtn');
+    const stopShareBtn = document.getElementById('stopShareBtn');
+    const fileInput = document.getElementById('fileInput');
+    const uploadProgress = document.getElementById('uploadProgress');
+    const qrCode = document.getElementById('qrCode');
+    const shareLink = document.getElementById('shareLink');
+    const shareOptions = document.getElementById('shareOptions');
+    const uploadAnimation = document.getElementById('uploadAnimation');
+    
+    let zip = new JSZip();
+    let uploadedFiles = [];
 
-  const sendBtn = document.getElementById('sendBtn');
-  const stopShareBtn = document.getElementById('stopShareBtn');
-  const fileInput = document.getElementById('fileInput');
-  const uploadProgress = document.getElementById('uploadProgress');
-  const qrCode = document.getElementById('qrCode');
-  const shareLink = document.getElementById('shareLink');
-  const shareOptions = document.getElementById('shareOptions');
+    async function uploadFiles(files) {
+      uploadAnimation.style.display = 'flex';
+      let totalSize = Array.from(files).reduce((acc, file) => acc + file.size, 0);
+      let uploadedSize = 0;
 
-  let fileRef, fileKey;
+      for (let file of files) {
+        const fileRef = storage.ref(`files/${file.name}`);
+        await fileRef.put(file);
 
-  async function uploadFile(file) {
-    fileRef = storage.ref(`files/${file.name}`);
-    const uploadTask = fileRef.put(file);
+        const url = await fileRef.getDownloadURL();
+        uploadedFiles.push({ name: file.name, url });
 
-    uploadTask.on(
-      'state_changed',
-      (snapshot) => {
-        const progress = (snapshot.bytesTransferred / snapshot.totalBytes) * 100;
-        uploadProgress.value = progress;
-        uploadProgress.style.display = 'block';
-      },
-      (error) => alert(`Error: ${error.message}`),
-      async () => {
-        const downloadURL = await fileRef.getDownloadURL();
-        const newFileRef = database.ref('files').push();
-        fileKey = newFileRef.key;
-
-        // Set up disconnection listener
-        newFileRef.set({ url: downloadURL });
-        newFileRef.onDisconnect().remove();
-
-        monitorFileDeletion(fileKey);
-        displayQRCode(downloadURL);
-        displayShareLink(downloadURL);
-        stopShareBtn.style.display = 'block';
+        uploadedSize += file.size;
+        uploadProgress.value = (uploadedSize / totalSize) * 100;
       }
-    );
-  }
 
-  function displayQRCode(url) {
-    qrCode.style.display = 'block';
-    new QRious({ element: qrCode, value: url, size: 200 });
-  }
-
-  function displayShareLink(url) {
-    shareLink.value = url;
-    shareOptions.style.display = 'flex';
-  }
-
-  function copyLink() {
-    shareLink.select();
-    document.execCommand('copy');
-    alert('Link copied to clipboard');
-  }
-
-  function shareOnWhatsApp() {
-    const url = shareLink.value;
-    window.open(`https://wa.me/?text=${encodeURIComponent(url)}`, '_blank');
-  }
-
-  function shareOnGmail() {
-    const url = shareLink.value;
-    window.open(`mailto:?subject=File Sharing Link&body=${encodeURIComponent(url)}`, '_blank');
-  }
-
-  function shareOnFacebook() {
-    const url = shareLink.value;
-    window.open(`https://www.facebook.com/sharer/sharer.php?u=${encodeURIComponent(url)}`, '_blank');
-  }
-
-  async function deleteFile() {
-    try {
-      if (fileRef) await fileRef.delete();
-      if (fileKey) await database.ref('files/' + fileKey).remove();
-      alert("File sharing stopped. The file has been deleted.");
-    } catch (error) {
-      alert("Error deleting file: " + error.message);
+      generateZip();
     }
-    qrCode.style.display = 'none';
-    uploadProgress.style.display = 'none';
-    shareOptions.style.display = 'none';
-    stopShareBtn.style.display = 'none';
-  }
 
-  function monitorFileDeletion(fileKey) {
-    const checkInterval = setInterval(async () => {
-      const fileSnapshot = await database.ref('files/' + fileKey).get();
-      if (!fileSnapshot.exists()) {
-        clearInterval(checkInterval);
-        if (fileRef) await fileRef.delete();
-      }
-    }, 3000);
-  }
+    async function generateZip() {
+      uploadedFiles.forEach(file => {
+        zip.file(file.name, fetch(file.url).then(res => res.blob()));
+      });
 
-  sendBtn.addEventListener('click', () => {
-    fileInput.style.display = 'block';
-  });
+      const content = await zip.generateAsync({ type: 'blob' });
+      const zipRef = storage.ref(`files/shared-files.zip`);
+      await zipRef.put(content);
 
-  fileInput.addEventListener('change', (e) => {
-    const file = e.target.files[0];
-    if (file) uploadFile(file);
-  });
+      const downloadURL = await zipRef.getDownloadURL();
+      displayQRCode(downloadURL);
+      displayShareLink(downloadURL);
 
-  stopShareBtn.addEventListener('click', async () => {
-    await deleteFile();
-  });
+      uploadAnimation.style.display = 'none';
+      stopShareBtn.style.display = 'block';
+    }
 
-  window.addEventListener('beforeunload', async () => {
-    await deleteFile();
-  });
-</script>
+    function displayQRCode(url) {
+      qrCode.style.display = 'block';
+      new QRious({ element: qrCode, value: url, size: 200 });
+    }
+
+    function displayShareLink(url) {
+      shareLink.value = url;
+      shareOptions.style.display = 'flex';
+    }
+
+    function copyLink() {
+      shareLink.select();
+      document.execCommand('copy');
+      alert('Link copied to clipboard');
+    }
+
+    sendBtn.addEventListener('click', () => fileInput.click());
+    fileInput.addEventListener('change', (e) => uploadFiles(e.target.files));
+  </script>
 </body>
 </html>
